@@ -1,0 +1,18 @@
+The tables map tells which Security Lake Glue tables you want to share and secure. Each entry supplies the database name and table name that Security Lake already created for a log source. 
+
+tables = {
+  cloudtrail = {
+    database_name = "aws_security_lake_glue_db_us_east_1"
+    table_name    = "aws_security_lake_table_us_east_1_cloud_trail_mgmt_2_0"
+  }
+
+  vpc_flow = {
+    database_name = "aws_security_lake_glue_db_us_east_1"
+    table_name    = "aws_security_lake_table_us_east_1_vpc_flow_2_0"
+  }
+
+  security_hub = {
+    database_name = "aws_security_lake_glue_db_us_east_1"
+    table_name    = "aws_security_lake_table_us_east_1_sh_findings_2_0"
+  }
+}
