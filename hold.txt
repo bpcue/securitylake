@@ -16,3 +16,13 @@ tables = {
     table_name    = "aws_security_lake_table_us_east_1_sh_findings_2_0"
   }
 }
+
+aws_iam_role.query: Creating...
+aws_iam_role.query: Creation complete after 0s [id=SecurityLakeQueryRole]
+aws_iam_role_policy.query_inline: Creating...
+╷
+│ Error: putting IAM Role (SecurityLakeQueryRole) Policy (SecurityLakeTenantQuery): operation error IAM: PutRolePolicy, https response error StatusCode: 400, RequestID: f35757c3-6e4d-4634-8951-a7e5c31625e2, MalformedPolicyDocument: Policy statement must contain resources.
+│
+│   with aws_iam_role_policy.query_inline,
+│   on main.tf line 97, in resource "aws_iam_role_policy" "query_inline":
+│   97: resource "aws_iam_role_policy" "query_inline" {
