@@ -1,124 +1,17 @@
-The tables map tells which Security Lake Glue tables you want to share and secure. Each entry supplies the database name and table name that Security Lake already created for a log source. 
-
-tables = {
-  cloudtrail = {
-    database_name = "aws_security_lake_glue_db_us_east_1"
-    table_name    = "aws_security_lake_table_us_east_1_cloud_trail_mgmt_2_0"
-  }
-
-  vpc_flow = {
-    database_name = "aws_security_lake_glue_db_us_east_1"
-    table_name    = "aws_security_lake_table_us_east_1_vpc_flow_2_0"
-  }
-
-  security_hub = {
-    database_name = "aws_security_lake_glue_db_us_east_1"
-    table_name    = "aws_security_lake_table_us_east_1_sh_findings_2_0"
-  }
-}
-
-# Terraform to create the tenant-side role used for querying Security Lake via
-# Lake Formation resource links. Run with credentials in the tenant account.
-
-terraform {
-  required_version = ">= 1.4.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.50"
-    }
-  }
-}
-
-provider "aws" {
-  region = var.bootstrap_region
-}
-
-data "aws_iam_policy_document" "assume_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "AWS"
-      identifiers = var.trusted_principal_arns
-    }
-  }
-}
-
-resource "aws_iam_role" "query" {
-  name               = var.role_name
-  assume_role_policy = data.aws_iam_policy_document.assume_role.json
-
-  tags = {
-    Purpose = "SecurityLakeTenantQuery"
-  }
-}
-
-data "aws_iam_policy_document" "query_permissions" {
-  statement {
-    sid    = "LakeFormation"
-    effect = "Allow"
-    actions = [
-      "lakeformation:GetDataAccess",
-      "lakeformation:ListPermissions"
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid    = "GlueDescribe"
-    effect = "Allow"
-    actions = [
-      "glue:GetDatabase",
-      "glue:GetDatabases",
-      "glue:GetTable",
-      "glue:GetTables",
-      "glue:GetPartition",
-      "glue:GetPartitions"
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid    = "AthenaExecution"
-    effect = "Allow"
-    actions = [
-      "athena:StartQueryExecution",
-      "athena:GetQueryExecution",
-      "athena:GetQueryResults",
-      "athena:ListQueryExecutions",
-      "athena:ListWorkGroups"
-    ]
-    resources = ["*"]
-  }
-}
-
-resource "aws_iam_role_policy" "query_inline" {
-  name   = "SecurityLakeTenantQuery"
-  role   = aws_iam_role.query.id
-  policy = data.aws_iam_policy_document.query_permissions.json
-}
-
-resource "aws_iam_role_policy" "query_s3" {
-  count  = var.athena_output_bucket_arn != null ? 1 : 0
-  name   = "SecurityLakeTenantQueryS3"
-  role   = aws_iam_role.query.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid      = "S3ResultsAccess"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
-        Resource = "${var.athena_output_bucket_arn}/*"
-      }
-    ]
-  })
-}
-
-output "query_role_arn" {
-  value       = aws_iam_role.query.arn
-  description = "Use this ARN as query_role_arn in the main tenant configuration."
-}
+terraform plan -out=plan
+╷
+│ Warning: Quoted keywords are deprecated
+│
+│   on lakeformation_cleanup.tf line 16, in resource "null_resource" "revoke_default_permissions":
+│   16:     when    = "create"
+│
+│ In this context, keywords are expected literally rather than in quotes. Terraform 0.11 and earlier required quotes, but quoted keywords are now deprecated and will be removed in a future version of        
+│ Terraform. Remove the quotes surrounding this keyword to silence this warning.
+╵
+╷
+│ Error: Unsupported block type
+│
+│   on lakeformation_filters.tf line 17, in resource "aws_lakeformation_data_cells_filter" "tenant_scope":
+│   17:     dynamic "column_names" {
+│
+│ Blocks of type "column_names" are not expected here.
