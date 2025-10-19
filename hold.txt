@@ -1,182 +1,606 @@
-Variable
------------
-###############################################################################
-# Input variables
-###############################################################################
+terraform plan -out=plan
+data.archive_file.ou_inventory_package: Reading...
+data.archive_file.ou_inventory_package: Read complete after 0s [id=9bf9909c55b65fff3e56ab7f47ee1a6d8a0546c5]
+data.aws_iam_policy_document.meta_store_permissions: Reading...
+data.aws_iam_policy_document.meta_store_assume: Reading...
+data.aws_iam_policy_document.meta_store_permissions: Read complete after 0s [id=1647713342]
+data.aws_iam_policy_document.meta_store_assume: Read complete after 1s [id=2677360714]
 
-variable "home_region" {
-  description = "Region hosting Security Lake (rollup Region)."
-  type        = string
-}
+Terraform used the selected providers to generate the following execution plan. Resource actions are indicated with the following symbols:
+  + create
 
-variable "organization_management_account_id" {
-  description = "AWS Organizations management account ID."
-  type        = string
-}
+Terraform planned the following actions, but then encountered a problem:
 
-variable "organization_management_role_name" {
-  description = "Role Terraform assumes in the management account (e.g. OrganizationAccountAccessRole)."
-  type        = string
-}
-
-variable "security_lake_account_id" {
-  description = "Account ID delegated as Amazon Security Lake administrator."
-  type        = string
-}
-
-variable "security_lake_admin_role_name" {
-  description = "Role Terraform assumes inside the Security Lake account."
-  type        = string
-}
-
-variable "ou_inventory_bucket" {
-  description = "S3 bucket containing OU membership JSON documents."
-  type        = string
-}
-
-variable "create_ou_inventory_bucket" {
-  description = "Set to true to let Terraform create and manage the OU inventory S3 bucket."
-  type        = bool
-  default     = false
-}
-
-variable "ou_inventory_prefix" {
-  description = "Prefix within the inventory bucket for OU JSON files."
-  type        = string
-  default     = "ous"
-}
-
-variable "default_security_lake_sources" {
-  description = "Default log sources to share with each tenant subscriber (source => version)."
-  type        = map(string)
-  default = {
-    CLOUD_TRAIL_MGMT = "2.0"
-    VPC_FLOW         = "2.0"
-    SH_FINDINGS      = "2.0"
-  }
-}
-
-variable "tables" {
-  description = "Catalog tables to expose (keyed by identifier used in tenant overrides)."
-  type = map(object({
-    database_name = string
-    table_name    = string
-  }))
-}
-
-variable "tenants" {
-  description = <<DESC
-Tenant configuration keyed by tenant identifier:
-  tenant_account_id        – Account ID that owns the subscriber slot
-  subscriber_external_id   – External ID the tenant provides for RAM/resource-link trust
-  query_role_arn           – IAM role in the tenant account granted Lake Formation permissions
-  ou_id                    – AWS Organizations OU containing tenant member accounts
-  description              – Optional description for RAM share
-  sources                  – Optional per-tenant source map (defaults to default_security_lake_sources)
-  include_accounts         – Optional additional account IDs beyond the OU membership
-  table_overrides          – Optional map keyed by var.tables entries with:
-                               * allowed_columns (list)
-                               * row_filter_expression (PartiQL string)
-DESC
-  type = map(object({
-    tenant_account_id        = string
-    subscriber_external_id   = string
-    query_role_arn           = string
-    ou_id                    = string
-    description              = optional(string)
-    sources                  = optional(map(string))
-    include_accounts         = optional(list(string))
-    table_overrides          = optional(map(object({
-      allowed_columns       = optional(list(string))
-      row_filter_expression = optional(string)
-    })))
-  }))
-}
-
-variable "tags" {
-  description = "Tags applied to all provisioned resources."
-  type        = map(string)
-  default     = {}
-}
-
-variable "enable_ou_inventory_lookup" {
-  description = "Set true to read tenant OU membership from S3. Leave false to rely solely on include_accounts."
-  type        = bool
-  default     = false
-}
-
-
-Subscriber
-----------
-# Create Security Lake subscribers
-
-###############################################################################
-# Amazon Security Lake subscribers (one per tenant)
-###############################################################################
-
-resource "aws_securitylake_subscriber" "tenant" {
-  for_each = var.tenants
-  provider = aws.security_lake
-
-  subscriber_name        = each.key
-  subscriber_description = lookup(each.value, "description", null)
-  access_type            = "LAKEFORMATION"
-
-  dynamic "source" {
-    for_each = each.value.sources != null ? each.value.sources : var.default_security_lake_sources
-
-    content {
-      aws_log_source_resource {
-        source_name    = source.key
-        source_version = source.value
-      }
+  # aws_cloudwatch_event_rule.ou_inventory_org_events will be created
+  + resource "aws_cloudwatch_event_rule" "ou_inventory_org_events" {
+      + arn            = (known after apply)
+      + description    = "Trigger OU inventory sync when Organization account membership changes."
+      + event_bus_name = "default"
+      + event_pattern  = jsonencode(
+            {
+              + detail      = {
+                  + eventName   = [
+                      + "CreateAccountResult",
+                      + "InviteAccountToOrganization",
+                      + "MoveAccount",
+                      + "RemoveAccountFromOrganization",
+                      + "CloseAccount",
+                    ]
+                  + eventSource = [
+                      + "organizations.amazonaws.com",
+                    ]
+                }
+              + detail-type = [
+                  + "AWS API Call via CloudTrail",
+                ]
+              + source      = [
+                  + "aws.organizations",
+                ]
+            }
+        )
+      + force_destroy  = false
+      + id             = (known after apply)
+      + name           = "securitylake-ou-sync-org-events"
+      + name_prefix    = (known after apply)
+      + region         = "eu-west-2"
+      + tags_all       = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
     }
-  }
 
-  subscriber_identity {
-    principal   = each.value.tenant_account_id
-    external_id = each.value.subscriber_external_id
-  }
-
-  depends_on = [
-    aws_securitylake_data_lake.this,
-    aws_lakeformation_data_lake_settings.defaults
-  ]
-
-  tags = merge(var.tags, { Tenant = each.key })
-}
-
-Inventory
----------
-# Load OU inventory from S3
-
-###############################################################################
-# Tenant OU inventory – read pre-generated JSON from S3
-###############################################################################
-
-locals {
-  tenant_s3_objects = var.enable_ou_inventory_lookup ? {
-    for tenant_key, tenant_cfg in var.tenants :
-    tenant_key => {
-      bucket = var.ou_inventory_bucket
-      key    = local.ou_inventory_prefix_clean != "" ? "${local.ou_inventory_prefix_clean}/${tenant_cfg.ou_id}.json" : "${tenant_cfg.ou_id}.json"
+  # aws_cloudwatch_event_rule.ou_inventory_scheduled will be created
+  + resource "aws_cloudwatch_event_rule" "ou_inventory_scheduled" {
+      + arn                 = (known after apply)
+      + description         = "Daily OU inventory refresh."
+      + event_bus_name      = "default"
+      + force_destroy       = false
+      + id                  = (known after apply)
+      + name                = "securitylake-ou-sync-daily"
+      + name_prefix         = (known after apply)
+      + region              = "eu-west-2"
+      + schedule_expression = "rate(1 day)"
+      + tags_all            = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
     }
-  } : {}
-}
 
-data "aws_s3_object" "tenant_accounts" {
-  for_each = var.enable_ou_inventory_lookup ? local.tenant_s3_objects : {}
-  provider = aws.security_lake
-  bucket   = each.value.bucket
-  key      = each.value.key
-}
+  # aws_cloudwatch_event_target.ou_inventory_org_events will be created
+  + resource "aws_cloudwatch_event_target" "ou_inventory_org_events" {
+      + arn            = (known after apply)
+      + event_bus_name = "default"
+      + force_destroy  = false
+      + id             = (known after apply)
+      + region         = "eu-west-2"
+      + rule           = "securitylake-ou-sync-org-events"
+      + target_id      = "lambda"
+    }
 
-locals {
-  tenant_accounts = {
-    for tenant_key, tenant_cfg in var.tenants :
-    tenant_key => sort(distinct(concat(
-      var.enable_ou_inventory_lookup ? try(jsondecode(data.aws_s3_object.tenant_accounts[tenant_key].body).accounts, []) : [],
-      coalesce(tenant_cfg.include_accounts, [])
-    )))
-  }
-}
+  # aws_cloudwatch_event_target.ou_inventory_scheduled will be created
+  + resource "aws_cloudwatch_event_target" "ou_inventory_scheduled" {
+      + arn            = (known after apply)
+      + event_bus_name = "default"
+      + force_destroy  = false
+      + id             = (known after apply)
+      + region         = "eu-west-2"
+      + rule           = "securitylake-ou-sync-daily"
+      + target_id      = "lambda"
+    }
+
+  # aws_cloudwatch_log_group.ou_inventory_lambda will be created
+  + resource "aws_cloudwatch_log_group" "ou_inventory_lambda" {
+      + arn               = (known after apply)
+      + id                = (known after apply)
+      + log_group_class   = (known after apply)
+      + name              = "/aws/lambda/securitylake-ou-inventory-sync"
+      + name_prefix       = (known after apply)
+      + region            = "eu-west-2"
+      + retention_in_days = 30
+      + skip_destroy      = false
+      + tags_all          = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
+    }
+
+  # aws_iam_role.meta_store_manager will be created
+  + resource "aws_iam_role" "meta_store_manager" {
+      + arn                   = (known after apply)
+      + assume_role_policy    = jsonencode(
+            {
+              + Statement = [
+                  + {
+                      + Action    = "sts:AssumeRole"
+                      + Effect    = "Allow"
+                      + Principal = {
+                          + Service = "securitylake.amazonaws.com"
+                        }
+                    },
+                ]
+              + Version   = "2012-10-17"
+            }
+        )
+      + create_date           = (known after apply)
+      + description           = "Role Security Lake uses for Glue partition updates"
+      + force_detach_policies = false
+      + id                    = (known after apply)
+      + managed_policy_arns   = (known after apply)
+      + max_session_duration  = 3600
+      + name                  = "AmazonSecurityLakeMetaStoreManager"
+      + name_prefix           = (known after apply)
+      + path                  = "/"
+      + tags                  = {
+          + "ManagedBy" = "terraform"
+          + "Owner"     = "SecurityTeam"
+          + "Project"   = "SecurityLake"
+        }
+      + tags_all              = {
+          + "ManagedBy" = "terraform"
+          + "Owner"     = "SecurityTeam"
+          + "Project"   = "SecurityLake"
+        }
+      + unique_id             = (known after apply)
+
+      + inline_policy (known after apply)
+    }
+
+  # aws_iam_role.ou_inventory_lambda will be created
+  + resource "aws_iam_role" "ou_inventory_lambda" {
+      + arn                   = (known after apply)
+      + assume_role_policy    = jsonencode(
+            {
+              + Statement = [
+                  + {
+                      + Action    = "sts:AssumeRole"
+                      + Effect    = "Allow"
+                      + Principal = {
+                          + Service = "lambda.amazonaws.com"
+                        }
+                    },
+                ]
+              + Version   = "2012-10-17"
+            }
+        )
+      + create_date           = (known after apply)
+      + force_detach_policies = false
+      + id                    = (known after apply)
+      + managed_policy_arns   = (known after apply)
+      + max_session_duration  = 3600
+      + name                  = (known after apply)
+      + name_prefix           = "securitylake-ou-sync-"
+      + path                  = "/"
+      + tags_all              = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
+      + unique_id             = (known after apply)
+
+      + inline_policy (known after apply)
+    }
+
+  # aws_iam_role_policy.meta_store_manager will be created
+  + resource "aws_iam_role_policy" "meta_store_manager" {
+      + id          = (known after apply)
+      + name        = (known after apply)
+      + name_prefix = (known after apply)
+      + policy      = jsonencode(
+            {
+              + Statement = [
+                  + {
+                      + Action   = [
+                          + "glue:UpdateTable",
+                          + "glue:GetTables",
+                          + "glue:GetTable",
+                          + "glue:GetPartitions",
+                          + "glue:GetPartition",
+                          + "glue:GetDatabases",
+                          + "glue:GetDatabase",
+                          + "glue:DeletePartition",
+                          + "glue:CreatePartition",
+                          + "glue:BatchDeletePartition",
+                          + "glue:BatchCreatePartition",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = [
+                          + "arn:aws:glue:eu-west-2:127549748211:table/*",
+                          + "arn:aws:glue:eu-west-2:127549748211:database/*",
+                          + "arn:aws:glue:eu-west-2:127549748211:catalog",
+                        ]
+                      + Sid      = "GlueMetadataMaintenance"
+                    },
+                  + {
+                      + Action   = [
+                          + "lakeformation:ListPermissions",
+                          + "lakeformation:GetResourceLFTags",
+                          + "lakeformation:GetDataAccess",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = "*"
+                      + Sid      = "LakeFormationRuntime"
+                    },
+                  + {
+                      + Action   = [
+                          + "s3:PutObject",
+                          + "s3:ListBucket",
+                          + "s3:GetObject",
+                          + "s3:GetBucketLocation",
+                          + "s3:DeleteObject",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = [
+                          + "arn:aws:s3:::aws-security-data-lake-*/*",
+                          + "arn:aws:s3:::aws-security-data-lake-*",
+                        ]
+                      + Sid      = "SecurityLakeBuckets"
+                    },
+                ]
+              + Version   = "2012-10-17"
+            }
+        )
+      + role        = (known after apply)
+    }
+
+  # aws_iam_role_policy.ou_inventory_lambda will be created
+  + resource "aws_iam_role_policy" "ou_inventory_lambda" {
+      + id          = (known after apply)
+      + name        = (known after apply)
+      + name_prefix = (known after apply)
+      + policy      = jsonencode(
+            {
+              + Statement = [
+                  + {
+                      + Action   = [
+                          + "organizations:ListAccountsForParent",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = "*"
+                      + Sid      = "OrganizationsRead"
+                    },
+                  + {
+                      + Action   = [
+                          + "s3:PutObject",
+                          + "s3:PutObjectAcl",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = [
+                          + "arn:aws:s3:::securitylake-tenant-inventory/ous/*",
+                        ]
+                      + Sid      = "WriteInventory"
+                    },
+                  + {
+                      + Action   = [
+                          + "s3:ListBucket",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = "arn:aws:s3:::securitylake-tenant-inventory"
+                      + Sid      = "ListInventoryBucket"
+                    },
+                  + {
+                      + Action   = [
+                          + "logs:CreateLogGroup",
+                          + "logs:CreateLogStream",
+                          + "logs:PutLogEvents",
+                        ]
+                      + Effect   = "Allow"
+                      + Resource = "*"
+                      + Sid      = "Logging"
+                    },
+                ]
+              + Version   = "2012-10-17"
+            }
+        )
+      + role        = (known after apply)
+    }
+
+  # aws_lakeformation_data_lake_settings.defaults will be created
+  + resource "aws_lakeformation_data_lake_settings" "defaults" {
+      + admins                             = [
+          + "arn:aws:iam::127549748211:role/SecurityLakeTerraform",
+        ]
+      + authorized_session_tag_value_list  = (known after apply)
+      + catalog_id                         = "127549748211"
+      + external_data_filtering_allow_list = (known after apply)
+      + id                                 = (known after apply)
+      + parameters                         = {
+          + "CROSS_ACCOUNT_VERSION" = "4"
+        }
+      + read_only_admins                   = (known after apply)
+      + region                             = "eu-west-2"
+      + trusted_resource_owners            = (known after apply)
+
+      + create_database_default_permissions (known after apply)
+
+      + create_table_default_permissions (known after apply)
+    }
+
+  # aws_lambda_function.ou_inventory will be created
+  + resource "aws_lambda_function" "ou_inventory" {
+      + architectures                  = (known after apply)
+      + arn                            = (known after apply)
+      + code_sha256                    = (known after apply)
+      + filename                       = "./build/tenant_ou_inventory.zip"
+      + function_name                  = "securitylake-ou-inventory-sync"
+      + handler                        = "lambda_function.lambda_handler"
+      + id                             = (known after apply)
+      + invoke_arn                     = (known after apply)
+      + last_modified                  = (known after apply)
+      + memory_size                    = 128
+      + package_type                   = "Zip"
+      + publish                        = false
+      + qualified_arn                  = (known after apply)
+      + qualified_invoke_arn           = (known after apply)
+      + region                         = "eu-west-2"
+      + reserved_concurrent_executions = -1
+      + role                           = (known after apply)
+      + runtime                        = "python3.12"
+      + signing_job_arn                = (known after apply)
+      + signing_profile_version_arn    = (known after apply)
+      + skip_destroy                   = false
+      + source_code_hash               = "fb6ccf040df29b67dadd4c24d874b98d3f0e523e5584ee3d615467d2fe91a865"
+      + source_code_size               = (known after apply)
+      + tags_all                       = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
+      + timeout                        = 300
+      + version                        = (known after apply)
+
+      + environment {
+          + variables = {
+              + "INVENTORY_BUCKET" = "securitylake-tenant-inventory"
+              + "INVENTORY_PREFIX" = "ous"
+              + "TARGET_OUS"       = "ou-mtb4-kaoayr7n"
+            }
+        }
+
+      + ephemeral_storage (known after apply)
+
+      + logging_config (known after apply)
+
+      + tracing_config (known after apply)
+    }
+
+  # aws_lambda_permission.allow_eventbridge_org_events will be created
+  + resource "aws_lambda_permission" "allow_eventbridge_org_events" {
+      + action              = "lambda:InvokeFunction"
+      + function_name       = "securitylake-ou-inventory-sync"
+      + id                  = (known after apply)
+      + principal           = "events.amazonaws.com"
+      + region              = "eu-west-2"
+      + source_arn          = (known after apply)
+      + statement_id        = "AllowExecutionFromEventBridgeOrg"
+      + statement_id_prefix = (known after apply)
+    }
+
+  # aws_lambda_permission.allow_eventbridge_schedule will be created
+  + resource "aws_lambda_permission" "allow_eventbridge_schedule" {
+      + action              = "lambda:InvokeFunction"
+      + function_name       = "securitylake-ou-inventory-sync"
+      + id                  = (known after apply)
+      + principal           = "events.amazonaws.com"
+      + region              = "eu-west-2"
+      + source_arn          = (known after apply)
+      + statement_id        = "AllowExecutionFromEventBridgeSchedule"
+      + statement_id_prefix = (known after apply)
+    }
+
+  # aws_organizations_delegated_administrator.security_lake will be created
+  + resource "aws_organizations_delegated_administrator" "security_lake" {
+      + account_id              = "127549748211"
+      + arn                     = (known after apply)
+      + delegation_enabled_date = (known after apply)
+      + email                   = (known after apply)
+      + id                      = (known after apply)
+      + joined_method           = (known after apply)
+      + joined_timestamp        = (known after apply)
+      + name                    = (known after apply)
+      + service_principal       = "securitylake.amazonaws.com"
+      + status                  = (known after apply)
+    }
+
+  # aws_s3_bucket.ou_inventory[0] will be created
+  + resource "aws_s3_bucket" "ou_inventory" {
+      + acceleration_status         = (known after apply)
+      + acl                         = (known after apply)
+      + arn                         = (known after apply)
+      + bucket                      = "securitylake-tenant-inventory"
+      + bucket_domain_name          = (known after apply)
+      + bucket_prefix               = (known after apply)
+      + bucket_region               = (known after apply)
+      + bucket_regional_domain_name = (known after apply)
+      + force_destroy               = false
+      + hosted_zone_id              = (known after apply)
+      + id                          = (known after apply)
+      + object_lock_enabled         = (known after apply)
+      + policy                      = (known after apply)
+      + region                      = "eu-west-2"
+      + request_payer               = (known after apply)
+      + tags                        = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+          + "Purpose" = "SecurityLakeTenantInventory"
+        }
+      + tags_all                    = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+          + "Purpose" = "SecurityLakeTenantInventory"
+        }
+      + website_domain              = (known after apply)
+      + website_endpoint            = (known after apply)
+
+      + cors_rule (known after apply)
+
+      + grant (known after apply)
+
+      + lifecycle_rule (known after apply)
+
+      + logging (known after apply)
+
+      + object_lock_configuration (known after apply)
+
+      + replication_configuration (known after apply)
+
+      + server_side_encryption_configuration (known after apply)
+
+      + versioning (known after apply)
+
+      + website (known after apply)
+    }
+
+  # aws_s3_bucket_public_access_block.ou_inventory[0] will be created
+  + resource "aws_s3_bucket_public_access_block" "ou_inventory" {
+      + block_public_acls       = true
+      + block_public_policy     = true
+      + bucket                  = (known after apply)
+      + id                      = (known after apply)
+      + ignore_public_acls      = true
+      + region                  = "eu-west-2"
+      + restrict_public_buckets = true
+    }
+
+  # aws_s3_bucket_server_side_encryption_configuration.ou_inventory[0] will be created
+  + resource "aws_s3_bucket_server_side_encryption_configuration" "ou_inventory" {
+      + bucket = (known after apply)
+      + id     = (known after apply)
+      + region = "eu-west-2"
+
+      + rule {
+          + apply_server_side_encryption_by_default {
+              + sse_algorithm     = "AES256"
+                # (1 unchanged attribute hidden)
+            }
+        }
+    }
+
+  # aws_s3_bucket_versioning.ou_inventory[0] will be created
+  + resource "aws_s3_bucket_versioning" "ou_inventory" {
+      + bucket = (known after apply)
+      + id     = (known after apply)
+      + region = "eu-west-2"
+
+      + versioning_configuration {
+          + mfa_delete = (known after apply)
+          + status     = "Enabled"
+        }
+    }
+
+  # aws_securitylake_data_lake.this will be created
+  + resource "aws_securitylake_data_lake" "this" {
+      + arn                         = (known after apply)
+      + id                          = (known after apply)
+      + meta_store_manager_role_arn = (known after apply)
+      + region                      = "eu-west-2"
+      + s3_bucket_arn               = (known after apply)
+      + tags                        = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
+      + tags_all                    = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+        }
+
+      + configuration {
+          + encryption_configuration = [
+              + {
+                  + kms_key_id = "S3_MANAGED_KEY"
+                },
+            ]
+          + region                   = "eu-west-2"
+
+          + lifecycle_configuration {
+              + expiration {
+                  + days = 365
+                }
+              + transition {
+                  + days          = 30
+                  + storage_class = "STANDARD_IA"
+                }
+            }
+        }
+    }
+
+  # aws_securitylake_subscriber.tenant["tenantA"] will be created
+  + resource "aws_securitylake_subscriber" "tenant" {
+      + access_type            = "LAKEFORMATION"
+      + arn                    = (known after apply)
+      + id                     = (known after apply)
+      + region                 = "eu-west-2"
+      + resource_share_arn     = (known after apply)
+      + resource_share_name    = (known after apply)
+      + role_arn               = (known after apply)
+      + s3_bucket_arn          = (known after apply)
+      + subscriber_description = "Tenant A Security Operations"
+      + subscriber_endpoint    = (known after apply)
+      + subscriber_name        = "tenantA"
+      + subscriber_status      = (known after apply)
+      + tags                   = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+          + "Tenant"  = "tenantA"
+        }
+      + tags_all               = {
+          + "Owner"   = "SecurityTeam"
+          + "Project" = "SecurityLake"
+          + "Tenant"  = "tenantA"
+        }
+
+      + source {
+          + aws_log_source_resource {
+              + source_name    = "CLOUD_TRAIL_MGMT"
+              + source_version = "2.0"
+            }
+        }
+      + source {
+          + aws_log_source_resource {
+              + source_name    = "SH_FINDINGS"
+              + source_version = "2.0"
+            }
+        }
+      + source {
+          + aws_log_source_resource {
+              + source_name    = "VPC_FLOW"
+              + source_version = "2.0"
+            }
+        }
+
+      + subscriber_identity {
+          + external_id = "tenantA-external-id"
+          + principal   = "802939326461"
+        }
+    }
+
+Plan: 20 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  + security_lake_subscribers = {
+      + tenantA = {
+          + access_type        = "LAKEFORMATION"
+          + arn                = (known after apply)
+          + resource_share_arn = (known after apply)
+        }
+    }
+╷
+│ Error: Invalid function argument
+│
+│   on tenant_tables.tf line 17, in locals:
+│   17:         lookup(coalesce(tenant_cfg.table_overrides, {}), table_key, {})
+│
+│ Invalid value for "default" parameter: the default value must have the same type as the map elements.
+╵
+╷
+│ Error: Invalid function argument
+│
+│   on tenant_tables.tf line 17, in locals:
+│   17:         lookup(coalesce(tenant_cfg.table_overrides, {}), table_key, {})
+│
+│ Invalid value for "default" parameter: the default value must have the same type as the map elements.
+╵
+╷
+│ Error: Invalid function argument
+│
+│   on tenant_tables.tf line 17, in locals:
+│   17:         lookup(coalesce(tenant_cfg.table_overrides, {}), table_key, {})
+│
+│ Invalid value for "default" parameter: the default value must have the same type as the map elements.
