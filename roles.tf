@@ -18,8 +18,8 @@ data "aws_iam_policy_document" "meta_store_assume" {
 
 data "aws_iam_policy_document" "meta_store_permissions" {
   statement {
-    sid     = "GlueMetadataMaintenance"
-    effect  = "Allow"
+    sid    = "GlueMetadataMaintenance"
+    effect = "Allow"
     actions = [
       "glue:BatchCreatePartition",
       "glue:BatchDeletePartition",
@@ -41,8 +41,8 @@ data "aws_iam_policy_document" "meta_store_permissions" {
   }
 
   statement {
-    sid     = "LakeFormationRuntime"
-    effect  = "Allow"
+    sid    = "LakeFormationRuntime"
+    effect = "Allow"
     actions = [
       "lakeformation:GetDataAccess",
       "lakeformation:GetResourceLFTags",
@@ -52,8 +52,8 @@ data "aws_iam_policy_document" "meta_store_permissions" {
   }
 
   statement {
-    sid     = "SecurityLakeBuckets"
-    effect  = "Allow"
+    sid    = "SecurityLakeBuckets"
+    effect = "Allow"
     actions = [
       "s3:GetBucketLocation",
       "s3:ListBucket",

@@ -11,7 +11,7 @@ data "archive_file" "ou_inventory_package" {
 }
 
 resource "aws_iam_role" "ou_inventory_lambda" {
-  provider = aws.security_lake
+  provider    = aws.security_lake
   name_prefix = "securitylake-ou-sync-"
 
   assume_role_policy = jsonencode({
@@ -28,7 +28,7 @@ resource "aws_iam_role" "ou_inventory_lambda" {
 
 resource "aws_iam_role_policy" "ou_inventory_lambda" {
   provider = aws.security_lake
-  role = aws_iam_role.ou_inventory_lambda.id
+  role     = aws_iam_role.ou_inventory_lambda.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -53,9 +53,9 @@ resource "aws_iam_role_policy" "ou_inventory_lambda" {
         ]
       },
       {
-        Sid    = "ListInventoryBucket"
-        Effect = "Allow"
-        Action = ["s3:ListBucket"]
+        Sid      = "ListInventoryBucket"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
         Resource = local.ou_inventory_bucket_arn
       },
       {
@@ -73,7 +73,7 @@ resource "aws_iam_role_policy" "ou_inventory_lambda" {
 }
 
 resource "aws_cloudwatch_log_group" "ou_inventory_lambda" {
-  provider = aws.security_lake
+  provider          = aws.security_lake
   name              = "/aws/lambda/${local.ou_inventory_lambda_name}"
   retention_in_days = 30
 }
@@ -107,7 +107,7 @@ resource "aws_cloudwatch_event_rule" "ou_inventory_org_events" {
   description = "Trigger OU inventory sync when Organization account membership changes."
 
   event_pattern = jsonencode({
-    "source"      : ["aws.organizations"],
+    "source" : ["aws.organizations"],
     "detail-type" : ["AWS API Call via CloudTrail"],
     "detail" : {
       "eventSource" : ["organizations.amazonaws.com"],
@@ -123,14 +123,14 @@ resource "aws_cloudwatch_event_rule" "ou_inventory_org_events" {
 }
 
 resource "aws_cloudwatch_event_target" "ou_inventory_org_events" {
-  provider = aws.security_lake
+  provider  = aws.security_lake
   rule      = aws_cloudwatch_event_rule.ou_inventory_org_events.name
   target_id = "lambda"
   arn       = aws_lambda_function.ou_inventory.arn
 }
 
 resource "aws_lambda_permission" "allow_eventbridge_org_events" {
-  provider     = aws.security_lake
+  provider      = aws.security_lake
   statement_id  = "AllowExecutionFromEventBridgeOrg"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ou_inventory.function_name
@@ -147,14 +147,14 @@ resource "aws_cloudwatch_event_rule" "ou_inventory_scheduled" {
 }
 
 resource "aws_cloudwatch_event_target" "ou_inventory_scheduled" {
-  provider = aws.security_lake
+  provider  = aws.security_lake
   rule      = aws_cloudwatch_event_rule.ou_inventory_scheduled.name
   target_id = "lambda"
   arn       = aws_lambda_function.ou_inventory.arn
 }
 
 resource "aws_lambda_permission" "allow_eventbridge_schedule" {
-  provider     = aws.security_lake
+  provider      = aws.security_lake
   statement_id  = "AllowExecutionFromEventBridgeSchedule"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ou_inventory.function_name
