@@ -12,9 +12,7 @@ locals {
       table_key => merge(
         {
           allowed_columns = null
-          row_filter_expression = length(local.tenant_accounts[tenant_key]) > 0
-            ? format("accountid IN (%s)", join(", ", [for acct in local.tenant_accounts[tenant_key] : format("'%s'", acct)]))
-            : "accountid IS NULL"
+          row_filter_expression = length(local.tenant_accounts[tenant_key]) > 0 ? format("accountid IN (%s)", join(", ", [for acct in local.tenant_accounts[tenant_key] : format("'%s'", acct)])) : "accountid IS NULL"
         },
         lookup(coalesce(tenant_cfg.table_overrides, {}), table_key, {})
       )

@@ -7,9 +7,7 @@ locals {
     for tenant_key, tenant_cfg in var.tenants :
     tenant_key => {
       bucket = var.ou_inventory_bucket
-      key    = local.ou_inventory_prefix_clean != ""
-        ? "${local.ou_inventory_prefix_clean}/${tenant_cfg.ou_id}.json"
-        : "${tenant_cfg.ou_id}.json"
+      key    = local.ou_inventory_prefix_clean != "" ? "${local.ou_inventory_prefix_clean}/${tenant_cfg.ou_id}.json" : "${tenant_cfg.ou_id}.json"
     }
   }
 }
