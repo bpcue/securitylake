@@ -27,11 +27,6 @@ resource "aws_lakeformation_data_cells_filter" "tenant_scope" {
   depends_on = [
     null_resource.revoke_default_permissions
   ]
-
-  tags = merge(var.tags, {
-    Tenant     = each.value.tenant_key
-    TableAlias = each.value.table_key
-  })
 }
 
 resource "aws_lakeformation_permissions" "tenant_database_describe" {

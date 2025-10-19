@@ -76,14 +76,14 @@ Tenant configuration keyed by tenant identifier:
                                * row_filter_expression (PartiQL string)
 DESC
   type = map(object({
-    tenant_account_id      = string
-    subscriber_external_id = string
-    query_role_arn         = string
-    ou_id                  = string
-    description            = optional(string)
-    sources                = optional(map(string))
-    include_accounts       = optional(list(string))
-    table_overrides = optional(map(object({
+    tenant_account_id        = string
+    subscriber_external_id   = string
+    query_role_arn           = string
+    ou_id                    = string
+    description              = optional(string)
+    sources                  = optional(map(string))
+    include_accounts         = optional(list(string))
+    table_overrides          = optional(map(object({
       allowed_columns       = optional(list(string))
       row_filter_expression = optional(string)
     })))
